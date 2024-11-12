@@ -12,41 +12,49 @@ function AskQuestion() {
     };
 
     const handleAsk = async () => {
-        if (!pdfFile || !question) {
-            alert("Please upload a PDF file and enter a question.");
+    if (!pdfFile || !question.trim()) {
+        alert("Please upload a PDF file and enter a question.");
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", pdfFile); // Ensure the key name matches the FastAPI endpoint parameter
+    formData.append("question", question);
+
+    try {
+        const response = await fetch("http://127.0.0.1:8000/ask", {
+            method: "POST",
+            headers: {
+                // No Content-Type header here, it will be automatically set by the browser to `multipart/form-data`
+            },
+            body: formData,
+        });
+
+        // Enhanced error handling
+        if (!response.ok) {
+            const errorData = await response.json();
+            const errorMsg = errorData.detail || "An error occurred.";
+            setAnswer(`Error: ${errorMsg}`);
             return;
         }
 
-        const formData = new FormData();
-        formData.append("file", pdfFile);
-        formData.append("question", question);
+        const data = await response.json();
+        const answerText = data.answer || "No relevant answer found.";
 
-        try {
-            const response = await fetch("http://127.0.0.1:8000/ask", {
-                method: "POST",
-                body: formData,
-            });
+        const newChat = {
+            question: question,
+            answer: answerText,
+        };
 
-            if (!response.ok) {
-                const errorData = await response.json();
-                setAnswer(`Error: ${errorData.error}`);
-                return;
-            }
+        setChatHistory([...chatHistory, newChat]);
+        setAnswer(answerText);
+        setQuestion(""); // Clear the input field
 
-            const data = await response.json();
-            const newChat = {
-                question: question,
-                answer: data.answer || "No relevant answer found.",
-            };
-
-            setChatHistory([...chatHistory, newChat]);
-            setAnswer(data.answer || "No relevant answer found.");
-            setQuestion(""); // Clear question input
-
-        } catch (error) {
-            setAnswer("An error occurred while fetching the answer.");
-        }
-    };
+    } catch (error) {
+        console.error("Fetch error:", error);
+        setAnswer("An error occurred while fetching the answer.");
+    }
+};
 
     return (
         <div className="ask-question-container">
