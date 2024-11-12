@@ -1,10 +1,10 @@
 import sqlite3
 
 def create_db():
-    conn = sqlite3.connect('pdf_qa.db')
+    conn = sqlite3.connect('pdf_qa1.db')
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS documents (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        fileId TEXT PRIMARY KEY,
                         filename TEXT,
                         upload_date TEXT)''')
     conn.commit()

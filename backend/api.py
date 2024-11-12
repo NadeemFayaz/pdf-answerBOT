@@ -12,8 +12,21 @@ import sqlite3
 import logging
 import fitz  # PyMuPDF
 from pathlib import Path
+import uuid
+from db import create_db
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_community.llms import OpenAI
+from getpass import getpass
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.prompts import PromptTemplate
 
+
+if "OPENAI_API_KEY" not in os.environ:
+    # print error
+    print("SET OPENAI API KEY")
 app = FastAPI()
+
 
 # Add CORS middleware
 app.add_middleware(
@@ -27,16 +40,6 @@ app.add_middleware(
 UPLOAD_DIR = "./uploaded_files"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# Initialize SQLite Database
-def create_db():
-    conn = sqlite3.connect('pdf_qa.db')
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS documents (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        filename TEXT,
-                        upload_date TEXT)''')
-    conn.commit()
-    conn.close()
 
 create_db()
 
@@ -67,39 +70,47 @@ async def upload_pdf(file: UploadFile = File(...)):
     with open(file_path, "wb") as buffer:
         buffer.write(content)
 
+    # create a random fileId
+    fileId = str(uuid.uuid4())
+
     # Save metadata in SQLite
-    conn = sqlite3.connect('pdf_qa.db')
+    conn = sqlite3.connect('pdf_qa1.db')
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO documents (filename, upload_date) VALUES (?, ?)",
-                   (file_path.name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    cursor.execute("INSERT INTO documents (fileId, filename, upload_date) VALUES (?, ?, ?)", (fileId, file_path.name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
 
-    return {"message": "PDF uploaded successfully", "filename": file_path.name}
+    return {"message": "PDF uploaded successfully", "Id": fileId}
 
 # Endpoint for asking questions about the PDF
 @app.post("/ask", response_class=JSONResponse)
-async def ask_question(file: UploadFile = File(...), question: str = Form(...)):
-    file_path = Path(UPLOAD_DIR) / file.filename
-
+async def ask_question(question: str = Form(...), file_id: str= Form(...)):
     try:
         logging.debug(f"Received question: {question}")
 
-        # Check if the file already exists
+        # Get file name from db and get that file from uploaded_file
+        conn = sqlite3.connect('pdf_qa1.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT filename FROM documents WHERE fileId = ?", (file_id,))
+        result = cursor.fetchone()
+        conn.close()
+
+        if not result:
+            raise HTTPException(status_code=404, detail="File not found.")
+        
+        filename = result[0]
+        print("Filename: ", filename)
+        file_path = Path(UPLOAD_DIR) / filename
+
         if not file_path.exists():
-            async with file as f:
-                with open(file_path, "wb") as buffer:
-                    buffer.write(await f.read())
+            raise HTTPException(status_code=404, detail="File not found.")
 
-        # Extract text from the PDF
-        doc = fitz.open(str(file_path))
-        pdf_text = ""
-        for page in doc:
-            pdf_text += page.get_text("text")
-            #logging.debug(f"Extracted PDF full text: {pdf_text}")
-
-        #logging.debug(f"Extracted PDF text (first 500 chars): {pdf_text[:500]}")
-
+        with fitz.open(file_path) as pdf:
+            pdf_text = ""
+            for page_num in range(pdf.page_count):
+                page = pdf[page_num]
+                pdf_text += page.get_text()
+        
         # Search for the answer in the PDF text
         result = search_pdf_for_answer(question, pdf_text)
         logging.debug(f"Answer found: {result}")
@@ -127,42 +138,26 @@ async def list_files():
 
 # Function to search PDF for the answer using section-based matching
 def search_pdf_for_answer(question: str, text: str):
-    paragraphs = text.split("\n\n")  # Split text into paragraphs (this assumes paragraphs are separated by empty lines)
+    # Step 1: Split PDF text into smaller, manageable sections
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    texts = text_splitter.split_text(text)
 
-    # Prepare the question and the paragraphs for comparison
-    corpus = paragraphs + [question]  # Add the question to the corpus for comparison
-    vectorizer = TfidfVectorizer(stop_words='english')  # Initialize TF-IDF vectorizer
-    
-    # Vectorize the text and the question
-    tfidf_matrix = vectorizer.fit_transform(corpus)
-    
-    # Calculate cosine similarity between the question and each paragraph
-    cosine_similarities = cosine_similarity(tfidf_matrix[-1], tfidf_matrix[:-1])
-    
-    # Get the index of the most relevant paragraph
-    most_relevant_idx = cosine_similarities.argmax()
-    most_relevant_paragraph = paragraphs[most_relevant_idx]
+    # Step 2: Create embeddings using OpenAI and store them in a vector store (e.g., FAISS)
+    embeddings = OpenAIEmbeddings()
+    docsearch = FAISS.from_texts(texts, embeddings)
 
-    # Return a limited portion of the matching paragraph (top 3 sentences)
-    sentences = most_relevant_paragraph.split('.')
-    top_sentences = ' '.join(sentences[:3])  # Return first 3 sentences as context
-    return top_sentences.strip() if top_sentences else "No relevant answer found."
+    # Step 3: Define the template and input variables for PromptTemplate
+    prompt_template = PromptTemplate(
+        input_variables=["question", "context"],
+        template="Based on the following context, answer the question:\n\nContext:\n{context}\n\nQuestion:\n{question}"
+    )
 
-# Function to split the text into sections
-def split_into_sections(text):
-    sections = {}
-    current_section = None
-    current_content = []
-    headings = ["abstract", "introduction", "conclusion", "methodology", "literature review"]
-    for line in text.splitlines():
-        line = line.strip()
-        if any(line.lower().startswith(heading) for heading in headings):
-            if current_section:
-                sections[current_section] = "\n".join(current_content)
-            current_section = line
-            current_content = []
-        else:
-            current_content.append(line)
-    if current_section:
-        sections[current_section] = "\n".join(current_content)
-    return sections
+    # Generate a prompt by formatting the template with the question and context
+    context = " ".join(texts)  # Join texts for simplicity, or use top relevant ones if applicable
+    prompt = prompt_template.format(question=question, context=context)
+
+    # Step 4: Use the OpenAI language model to generate an answer based on the prompt
+    openai = OpenAI()
+    result = openai(prompt=prompt)  # Pass the prompt directly here
+
+    return result

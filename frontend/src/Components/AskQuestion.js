@@ -6,10 +6,34 @@ function AskQuestion() {
     const [answer, setAnswer] = useState("");
     const [pdfFile, setPdfFile] = useState(null);
     const [chatHistory, setChatHistory] = useState([]);
+    const [fileId, setFileId] = useState(null);
 
     const handleFileChange = (e) => {
         setPdfFile(e.target.files[0]);
     };
+
+    const Upload = async () => {
+        if(!pdfFile) {
+            alert("Please upload a PDF file.");
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append("file", pdfFile);
+
+        const res = await fetch("http://127.0.0.1:8000/upload", {
+            method: "POST",
+            body: formData,
+        })
+
+        if (res.ok) {
+            const data = await res.json();
+            setFileId(data.Id);
+        } else {
+            alert("An error occurred while uploading the file.");
+        }
+    };
+
 
     const handleAsk = async () => {
     if (!pdfFile || !question.trim()) {
@@ -17,16 +41,19 @@ function AskQuestion() {
         return;
     }
 
+    if(!fileId) {
+        alert("Please upload the PDF file first.");
+        return;
+    }
+
     const formData = new FormData();
-    formData.append("file", pdfFile); // Ensure the key name matches the FastAPI endpoint parameter
+
     formData.append("question", question);
+    formData.append("file_id", fileId);
 
     try {
         const response = await fetch("http://127.0.0.1:8000/ask", {
             method: "POST",
-            headers: {
-                // No Content-Type header here, it will be automatically set by the browser to `multipart/form-data`
-            },
             body: formData,
         });
 
@@ -58,9 +85,14 @@ function AskQuestion() {
 
     return (
         <div className="ask-question-container">
-            <div className="upload-section">
+            {!fileId ? (
+                <div>
                 <input type="file" accept=".pdf" onChange={handleFileChange} />
+                <button onClick={Upload}>
+                    Upload
+                </button>
             </div>
+            ) : (
             <div className="chat-box">
                 <div className="chat-history">
                     {chatHistory.map((chat, index) => (
@@ -80,6 +112,7 @@ function AskQuestion() {
                     <button onClick={handleAsk}>Ask</button>
                 </div>
             </div>
+            )}
         </div>
     );
 }
