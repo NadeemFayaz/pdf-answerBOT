@@ -1,15 +1,53 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import "./AskQuestion.css";
 
 function AskQuestion() {
     const [question, setQuestion] = useState("");
-    const [answer, setAnswer] = useState("");
     const [pdfFile, setPdfFile] = useState(null);
     const [chatHistory, setChatHistory] = useState([]);
     const [fileId, setFileId] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [uploadedFiles, setUploadedFiles] = useState([]);
+
+    useEffect(() => {
+        const fetchUploadedFiles = async () => {
+            try {
+                const response = await fetch("http://localhost:8000/files");
+                if (response.ok) {
+                    const data = await response.json();
+                    setUploadedFiles(data);
+                }
+            } catch (error) {
+                console.error("Fetch error:", error);
+            }
+        };
+        fetchUploadedFiles();
+    }, []);
+
+    useEffect(() => {
+        console.log(uploadedFiles);
+    }, [uploadedFiles]);
+
 
     const handleFileChange = (e) => {
         setPdfFile(e.target.files[0]);
+    };
+
+
+    const handleDelete = async (fileId) => {
+        try {   
+            const response = await fetch(`http://localhost:8000/files/${fileId}`, {
+                method: "DELETE",
+            });
+
+            if (response.ok) {
+                const newFiles = uploadedFiles.filter((file) => file.id !== fileId);
+                setUploadedFiles(newFiles);
+            }
+
+        } catch (error) {
+            console.error("Fetch error:", error);
+        }
     };
 
     const Upload = async () => {
@@ -34,87 +72,108 @@ function AskQuestion() {
         }
     };
 
-
     const handleAsk = async () => {
-    if (!pdfFile || !question.trim()) {
-        alert("Please upload a PDF file and enter a question.");
-        return;
-    }
-
-    if(!fileId) {
-        alert("Please upload the PDF file first.");
-        return;
-    }
-
-    const formData = new FormData();
-
-    formData.append("question", question);
-    formData.append("file_id", fileId);
-
-    try {
-        const response = await fetch("http://127.0.0.1:8000/ask", {
-            method: "POST",
-            body: formData,
-        });
-
-        // Enhanced error handling
-        if (!response.ok) {
-            const errorData = await response.json();
-            const errorMsg = errorData.detail || "An error occurred.";
-            setAnswer(`Error: ${errorMsg}`);
+        if (loading) {
             return;
         }
 
-        const data = await response.json();
-        const answerText = data.answer || "No relevant answer found.";
+        if (!fileId) {
+            alert("Please upload the PDF file first.");
+            return;
+        }
 
-        const newChat = {
-            question: question,
-            answer: answerText,
-        };
+        const formData = new FormData();
+        formData.append("file_id", fileId);
+        formData.append("question", question);
 
-        setChatHistory([...chatHistory, newChat]);
-        setAnswer(answerText);
-        setQuestion(""); // Clear the input field
+        setLoading(true);
 
-    } catch (error) {
-        console.error("Fetch error:", error);
-        setAnswer("An error occurred while fetching the answer.");
-    }
-};
+        const currentChatHistory = [...chatHistory];
+        const newChat = { question, answer: "Loading..." };
+
+        setChatHistory([...currentChatHistory, newChat]);
+        setQuestion("");
+
+        try {
+            const response = await fetch("http://127.0.0.1:8000/ask", {
+                method: "POST",
+                body: formData,
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                const errorMsg = errorData.detail || "An error occurred.";
+                setChatHistory([...currentChatHistory, { question, answer: `Error: ${errorMsg}` }]);
+                return;
+            }
+
+            const data = await response.json();
+            const answerText = data.answer || "No relevant answer found.";
+
+            const newAnswer = { question, answer: answerText };
+            setChatHistory([...currentChatHistory, newAnswer]);
+        } catch (error) {
+            console.error("Fetch error:", error);
+            setChatHistory([...currentChatHistory, { question, answer: "An error occurred while fetching the answer." }]);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     return (
         <div className="ask-question-container">
             {!fileId ? (
-                <div>
-                <input type="file" accept=".pdf" onChange={handleFileChange} />
-                <button onClick={Upload}>
-                    Upload
-                </button>
-            </div>
+                <div>                    
+                    <div>
+                        <h2>Upload a FIle</h2>
+                        <input type="file" accept=".pdf" onChange={handleFileChange} />
+                    <button onClick={Upload} >
+                        Upload
+                    </button>
+                </div>
+                    <div>
+                        <h2>Uploaded Files</h2>
+                        <ul>
+                            {uploadedFiles?.map((file) => (
+                                <li key={file.id} >
+                                    <div onClick={() => setFileId(file.id)}>
+                                        {file.name}
+                                    </div>
+                                    <button onClick={() => handleDelete(file.id)}>
+                                        Delete
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                </div>
+
             ) : (
-            <div className="chat-box">
-                <div className="chat-history">
-                    {chatHistory.map((chat, index) => (
-                        <div key={index} className="chat-message">
-                            <div className="question">You: {chat.question}</div>
-                            <div className="answer">AI: {chat.answer}</div>
-                        </div>
-                    ))}
+                <div className="chat-box">
+                    <div className="chat-history">
+                        {chatHistory.map((chat, index) => (
+                            <div key={index} className="chat-message">
+                                <div className="question">You: {chat.question}</div>
+                                <div className="answer">AI: {chat.answer}</div>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="input-section">
+                        <input
+                            type="text"
+                            placeholder="Ask a question..."
+                            value={question}
+                            disabled={loading}
+                            onChange={(e) => setQuestion(e.target.value)}
+                        />
+                        <button onClick={handleAsk} disabled={loading}>
+                            {loading ? "Asking..." : "Ask"}
+                        </button>
+                    </div>
                 </div>
-                <div className="input-section">
-                    <input
-                        type="text"
-                        placeholder="Ask a question..."
-                        value={question}
-                        onChange={(e) => setQuestion(e.target.value)}
-                    />
-                    <button onClick={handleAsk}>Ask</button>
-                </div>
-            </div>
             )}
         </div>
     );
 }
 
-export default AskQuestion;
+export default AskQuestion; 

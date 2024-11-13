@@ -13,20 +13,25 @@ import logging
 import fitz  # PyMuPDF
 from pathlib import Path
 import uuid
-from db import create_db
+from db import create_db, UploadPDFFile, RetrieveFile, RetrieveFiles, DeleteFile
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import OpenAIEmbeddings
 from langchain_community.llms import OpenAI
 from getpass import getpass
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.prompts import PromptTemplate
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.llms import HuggingFaceHub
+from dotenv import load_dotenv
 
 
-if "OPENAI_API_KEY" not in os.environ:
-    # print error
-    print("SET OPENAI API KEY")
+load_dotenv()
+
 app = FastAPI()
 
+if "HUGGINGFACEHUB_API_TOKEN" not in os.environ:
+    print("SET HUGGINGFACEHUB_API_TOKEN")
+    exit()
 
 # Add CORS middleware
 app.add_middleware(
@@ -70,36 +75,16 @@ async def upload_pdf(file: UploadFile = File(...)):
     with open(file_path, "wb") as buffer:
         buffer.write(content)
 
-    # create a random fileId
-    fileId = str(uuid.uuid4())
-
-    # Save metadata in SQLite
-    conn = sqlite3.connect('pdf_qa1.db')
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO documents (fileId, filename, upload_date) VALUES (?, ?, ?)", (fileId, file_path.name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
-    conn.close()
-
-    return {"message": "PDF uploaded successfully", "Id": fileId}
+    
+    fileId = UploadPDFFile(file_path)
+    return {"message": "PDF uploaded successfully", "Id": fileId}    
 
 # Endpoint for asking questions about the PDF
 @app.post("/ask", response_class=JSONResponse)
 async def ask_question(question: str = Form(...), file_id: str= Form(...)):
     try:
-        logging.debug(f"Received question: {question}")
 
-        # Get file name from db and get that file from uploaded_file
-        conn = sqlite3.connect('pdf_qa1.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT filename FROM documents WHERE fileId = ?", (file_id,))
-        result = cursor.fetchone()
-        conn.close()
-
-        if not result:
-            raise HTTPException(status_code=404, detail="File not found.")
-        
-        filename = result[0]
-        print("Filename: ", filename)
+        filename = RetrieveFile(file_id)
         file_path = Path(UPLOAD_DIR) / filename
 
         if not file_path.exists():
@@ -121,29 +106,14 @@ async def ask_question(question: str = Form(...), file_id: str= Form(...)):
         logging.error(f"Error processing PDF or question: {str(e)}")
         return {"error": f"Error: {str(e)}"}
 
-# Endpoint to download a PDF file
-@app.get("/download/{filename}")
-async def download_pdf(filename: str):
-    file_path = Path(UPLOAD_DIR) / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found.")
-    
-    return FileResponse(path=str(file_path), media_type='application/pdf', filename=filename)
-
-# Endpoint to list all uploaded files
-@app.get("/files")
-async def list_files():
-    files = os.listdir(UPLOAD_DIR)
-    return {"files": files}
-
 # Function to search PDF for the answer using section-based matching
 def search_pdf_for_answer(question: str, text: str):
     # Step 1: Split PDF text into smaller, manageable sections
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     texts = text_splitter.split_text(text)
 
-    # Step 2: Create embeddings using OpenAI and store them in a vector store (e.g., FAISS)
-    embeddings = OpenAIEmbeddings()
+    # Step 2: Create embeddings using Hugging Face and store them in a vector store (e.g., FAISS)
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     docsearch = FAISS.from_texts(texts, embeddings)
 
     # Step 3: Define the template and input variables for PromptTemplate
@@ -156,8 +126,28 @@ def search_pdf_for_answer(question: str, text: str):
     context = " ".join(texts)  # Join texts for simplicity, or use top relevant ones if applicable
     prompt = prompt_template.format(question=question, context=context)
 
-    # Step 4: Use the OpenAI language model to generate an answer based on the prompt
-    openai = OpenAI()
-    result = openai(prompt=prompt)  # Pass the prompt directly here
+    # Step 4: Use the Hugging Face language model to generate an answer based on the prompt
+    llm = HuggingFaceHub(repo_id="google/flan-t5-base", model_kwargs={"temperature": 0})
+    result = llm(prompt)
 
     return result
+
+
+# Endpoint for retrieving the list of uploaded files
+@app.get("/files", response_class=JSONResponse)
+async def get_files():
+    return RetrieveFiles()
+
+#Endpoint for deleting a file
+@app.delete("/files/{file_id}")
+async def delete_file(file_id: str):
+    filename = RetrieveFile(file_id)
+    file_path = Path(UPLOAD_DIR) / filename
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    os.remove(file_path)
+    DeleteFile(file_id)
+    return {"message": "File deleted successfully"}
+
