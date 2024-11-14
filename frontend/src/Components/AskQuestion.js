@@ -8,11 +8,12 @@ function AskQuestion() {
     const [fileId, setFileId] = useState(null);
     const [loading, setLoading] = useState(false);
     const [uploadedFiles, setUploadedFiles] = useState([]);
+    const apiUrl = process.env.REACT_APP_API_URL;
 
     useEffect(() => {
         const fetchUploadedFiles = async () => {
             try {
-                const response = await fetch("http://localhost:8000/files");
+                const response = await fetch(`${apiUrl}/files`);
                 if (response.ok) {
                     const data = await response.json();
                     setUploadedFiles(data);
@@ -36,7 +37,7 @@ function AskQuestion() {
 
     const handleDelete = async (fileId) => {
         try {   
-            const response = await fetch(`http://localhost:8000/files/${fileId}`, {
+            const response = await fetch(`${apiUrl}/files/${fileId}`, {
                 method: "DELETE",
             });
 
@@ -59,16 +60,21 @@ function AskQuestion() {
         const formData = new FormData();
         formData.append("file", pdfFile);
 
-        const res = await fetch("http://127.0.0.1:8000/upload", {
-            method: "POST",
-            body: formData,
-        })
+        setLoading(true);
+        try{
+            const res = await fetch(`${apiUrl}/upload`, {
+                method: "POST",
+                body: formData,
+            })
 
-        if (res.ok) {
-            const data = await res.json();
-            setFileId(data.Id);
-        } else {
-            alert("An error occurred while uploading the file.");
+            if (res.ok) {
+                const data = await res.json();
+                setFileId(data.Id);
+            } else {
+                alert("An error occurred while uploading the file.");
+            }
+         } finally {
+            setLoading(false);
         }
     };
 
@@ -95,7 +101,7 @@ function AskQuestion() {
         setQuestion("");
 
         try {
-            const response = await fetch("http://127.0.0.1:8000/ask", {
+            const response = await fetch(`${apiUrl}/ask`, {
                 method: "POST",
                 body: formData,
             });
@@ -127,8 +133,8 @@ function AskQuestion() {
                     <div>
                         <h2>Upload a FIle</h2>
                         <input type="file" accept=".pdf" onChange={handleFileChange} />
-                    <button onClick={Upload} >
-                        Upload
+                    <button onClick={Upload} disabled={loading}>
+                        {loading? "Uploadin..." : "Upload"}
                     </button>
                 </div>
                     <div>
