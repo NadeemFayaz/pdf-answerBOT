@@ -12,7 +12,7 @@ def create_db():
     conn.commit()
     conn.close()
 
-def UploadPDFFile(file_path):
+def UploadPDFFile(file_key):
     # create a random fileId
     fileId = str(uuid.uuid4())
 
@@ -20,7 +20,7 @@ def UploadPDFFile(file_path):
     # Save metadata in SQLite
     conn = sqlite3.connect('pdf_qa1.db')
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO documents (fileId, filename, upload_date) VALUES (?, ?, ?)", (fileId, file_path.name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    cursor.execute("INSERT INTO documents (fileId, filename, upload_date) VALUES (?, ?, ?)", (fileId, file_key, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
 
